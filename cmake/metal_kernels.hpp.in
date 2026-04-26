@@ -1,0 +1,9 @@
+#pragma once
+
+namespace metallic {
+
+inline constexpr char kMetalKernels[] = R"METALLIC_KERNELS(
+@METALLIC_KERNEL_SOURCE@
+)METALLIC_KERNELS";
+
+} // namespace metallic
