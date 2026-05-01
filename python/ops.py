@@ -2,8 +2,52 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from autograd import Tensor, TensorOp
+from autograd import Tensor, TensorOp, TensorTuple, TensorTupleOp
 import backend_ndarray as nd
+
+
+class MakeTensorTuple(TensorTupleOp):
+    def compute(self, *args):
+        return tuple(args)
+
+    def gradient(self, out_grad, node):
+        assert isinstance(out_grad, TensorTuple)
+        return tuple(out_grad[index] for index in range(len(out_grad)))
+
+
+def make_tuple(*args):
+    return MakeTensorTuple()(*args)
+
+
+class TupleGetItem(TensorOp):
+    def __init__(self, index: int):
+        self.index = index
+
+    def __call__(self, *args):
+        value = args[0]
+        fold_const = args[1] if len(args) > 1 else True
+        assert isinstance(value, TensorTuple)
+        if fold_const and isinstance(value.op, MakeTensorTuple):
+            return value.inputs[self.index]
+        return Tensor.make_from_op(self, [value])
+
+    def compute(self, value):
+        return value[self.index]
+
+    def gradient(self, out_grad, node):
+        values = node.inputs[0]
+        return make_tuple(
+            *(
+                out_grad
+                if index == self.index
+                else Tensor(nd.full(values[index].shape, 0, device=out_grad.device))
+                for index in range(len(values))
+            )
+        )
+
+
+def tuple_get_item(value, index):
+    return TupleGetItem(index)(value)
 
 
 def _normalize_axes(axes, ndim: int) -> tuple[int, ...]:
@@ -306,21 +350,172 @@ def logsumexp(a, axes=None):
     return LogSumExp(axes)(a)
 
 
+class Stack(TensorOp):
+    def __init__(self, axis: int):
+        self.axis = axis
+
+    def compute(self, values):
+        axis = self.axis if self.axis >= 0 else self.axis + len(values[0].shape) + 1
+        count = len(values)
+        out = nd.empty((count, values[0].size), device=values[0].device)
+        for index, value in enumerate(values):
+            out[index, :] = value.reshape((1, value.size))
+        shape = (count,) + values[0].shape
+        axes = list(range(1, len(shape)))
+        axes.insert(axis, 0)
+        return out.reshape(shape).permute(tuple(axes))
+
+    def gradient(self, out_grad, node):
+        return split(out_grad, self.axis)
+
+
 def stack(tensors: Sequence[Tensor], axis: int = 0):
-    raise NotImplementedError("stack will be added with TensorTuple support")
+    return Stack(axis)(make_tuple(*tensors))
+
+
+class Split(TensorTupleOp):
+    def __init__(self, axis: int):
+        self.axis = axis
+
+    def compute(self, value):
+        axis = self.axis if self.axis >= 0 else self.axis + len(value.shape)
+        count = value.shape[axis]
+        axes = list(range(len(value.shape)))
+        axes[0], axes[axis] = axes[axis], axes[0]
+        shape = list(value.shape)
+        shape.pop(axis)
+        value = value.permute(tuple(axes)).reshape((count, value.size // count))
+        return tuple(value[index, :].reshape(tuple(shape)) for index in range(count))
+
+    def gradient(self, out_grad, node):
+        assert isinstance(out_grad, TensorTuple)
+        return stack(tuple(out_grad), self.axis)
 
 
 def split(tensor: Tensor, axis: int = 0):
-    raise NotImplementedError("split will be added with TensorTuple support")
+    return Split(axis)(tensor)
+
+
+class Flip(TensorOp):
+    def __init__(self, axes):
+        self.axes = axes
+
+    def compute(self, value):
+        axes = tuple(range(len(value.shape))) if self.axes is None else self.axes
+        return value.flip(axes)
+
+    def gradient(self, out_grad, node):
+        return flip(out_grad, self.axes)
+
+
+def flip(tensor: Tensor, axes=None):
+    return Flip(axes)(tensor)
+
+
+class Dilate(TensorOp):
+    def __init__(self, axes: tuple[int, ...], dilation: int):
+        self.axes = axes
+        self.dilation = dilation
+
+    def compute(self, value):
+        axes = set(_normalize_axes(self.axes, len(value.shape)))
+        shape = tuple(
+            dim * (self.dilation + 1) if axis in axes else dim
+            for axis, dim in enumerate(value.shape)
+        )
+        out = nd.full(shape, 0, device=value.device)
+        slices = tuple(
+            slice(0, dim, self.dilation + 1) if axis in axes else slice(None)
+            for axis, dim in enumerate(shape)
+        )
+        out[slices] = value
+        return out
+
+    def gradient(self, out_grad, node):
+        return undilate(out_grad, self.axes, self.dilation)
 
 
 def dilate(tensor: Tensor, axes: tuple[int, ...], dilation: int):
-    raise NotImplementedError("dilate will be added with convolution support")
+    return Dilate(axes, dilation)(tensor)
+
+
+class UnDilate(TensorOp):
+    def __init__(self, axes: tuple[int, ...], dilation: int):
+        self.axes = axes
+        self.dilation = dilation
+
+    def compute(self, value):
+        axes = set(_normalize_axes(self.axes, len(value.shape)))
+        slices = tuple(
+            slice(0, dim, self.dilation + 1) if axis in axes else slice(None)
+            for axis, dim in enumerate(value.shape)
+        )
+        return value[slices]
+
+    def gradient(self, out_grad, node):
+        return dilate(out_grad, self.axes, self.dilation)
 
 
 def undilate(tensor: Tensor, axes: tuple[int, ...], dilation: int):
-    raise NotImplementedError("undilate will be added with convolution support")
+    return UnDilate(axes, dilation)(tensor)
+
+
+class Conv(TensorOp):
+    def __init__(self, stride: int = 1, padding: int = 0):
+        self.stride = stride
+        self.padding = padding
+
+    def compute(self, value, weight):
+        value = value.pad(
+            ((0, 0), (self.padding, self.padding), (self.padding, self.padding), (0, 0))
+        )
+        batch, height, width, in_channels = value.shape
+        kernel, _, _, out_channels = weight.shape
+        batch_stride, height_stride, width_stride, channel_stride = value.strides
+
+        out_height = (height - kernel) // self.stride + 1
+        out_width = (width - kernel) // self.stride + 1
+        inner = kernel * kernel * in_channels
+        cols = value.as_strided(
+            (batch, out_height, out_width, kernel, kernel, in_channels),
+            (
+                batch_stride,
+                height_stride * self.stride,
+                width_stride * self.stride,
+                height_stride,
+                width_stride,
+                channel_stride,
+            ),
+        ).compact()
+        out = cols.reshape((batch * out_height * out_width, inner)) @ weight.reshape(
+            (inner, out_channels)
+        )
+        return out.reshape((batch, out_height, out_width, out_channels))
+
+    def gradient(self, out_grad, node):
+        value, weight = node.inputs
+        batch, height, width, in_channels = value.shape
+        kernel, _, _, out_channels = weight.shape
+
+        grad_weight = conv(
+            transpose(transpose(value, (1, 2)), (0, 3)),
+            transpose(out_grad, (0, 2)),
+            stride=1,
+            padding=self.padding,
+        )
+        grad_weight = transpose(grad_weight, (0, 2))
+
+        flipped_weight = transpose(flip(weight, (0, 1)), (2, 3))
+        grad = out_grad
+        if self.stride > 1:
+            grad = dilate(grad, (1, 2), self.stride - 1)
+        grad_value = conv(
+            grad, flipped_weight, stride=1, padding=kernel - self.padding - 1
+        )
+        return grad_value.reshape(
+            (batch, height, width, in_channels)
+        ), grad_weight.reshape((kernel, kernel, in_channels, out_channels))
 
 
 def conv(a: Tensor, b: Tensor, stride: int = 1, padding: int = 0):
-    raise NotImplementedError("conv will be added after the dense tensor core")
+    return Conv(stride, padding)(a, b)
