@@ -316,6 +316,78 @@ void Matmul(const Array &a, const Array &b, Array *out, uint32_t rows,
                                         });
 }
 
+void ConvForward(const Array &x, const Array &w, Array *out, uint32_t n,
+                 uint32_t h, uint32_t width, uint32_t cin, uint32_t kernel,
+                 uint32_t cout, uint32_t stride, uint32_t padding,
+                 uint32_t out_h, uint32_t out_w) {
+    uint32_t size = U32(out->size);
+    Runtime::Get().Launch1D("conv_forward_kernel", out->size,
+                            [&](auto &encoder) {
+                                SetBuffer(encoder, 0, x);
+                                SetBuffer(encoder, 1, w);
+                                SetBuffer(encoder, 2, *out);
+                                SetValue(encoder, 3, n);
+                                SetValue(encoder, 4, h);
+                                SetValue(encoder, 5, width);
+                                SetValue(encoder, 6, cin);
+                                SetValue(encoder, 7, kernel);
+                                SetValue(encoder, 8, cout);
+                                SetValue(encoder, 9, stride);
+                                SetValue(encoder, 10, padding);
+                                SetValue(encoder, 11, out_h);
+                                SetValue(encoder, 12, out_w);
+                                SetValue(encoder, 13, size);
+                            });
+}
+
+void ConvBackwardInput(const Array &out_grad, const Array &w, Array *x_grad,
+                       uint32_t n, uint32_t h, uint32_t width, uint32_t cin,
+                       uint32_t kernel, uint32_t cout, uint32_t stride,
+                       uint32_t padding, uint32_t out_h, uint32_t out_w) {
+    uint32_t size = U32(x_grad->size);
+    Runtime::Get().Launch1D("conv_backward_input_kernel", x_grad->size,
+                            [&](auto &encoder) {
+                                SetBuffer(encoder, 0, out_grad);
+                                SetBuffer(encoder, 1, w);
+                                SetBuffer(encoder, 2, *x_grad);
+                                SetValue(encoder, 3, n);
+                                SetValue(encoder, 4, h);
+                                SetValue(encoder, 5, width);
+                                SetValue(encoder, 6, cin);
+                                SetValue(encoder, 7, kernel);
+                                SetValue(encoder, 8, cout);
+                                SetValue(encoder, 9, stride);
+                                SetValue(encoder, 10, padding);
+                                SetValue(encoder, 11, out_h);
+                                SetValue(encoder, 12, out_w);
+                                SetValue(encoder, 13, size);
+                            });
+}
+
+void ConvBackwardWeight(const Array &x, const Array &out_grad, Array *w_grad,
+                        uint32_t n, uint32_t h, uint32_t width, uint32_t cin,
+                        uint32_t kernel, uint32_t cout, uint32_t stride,
+                        uint32_t padding, uint32_t out_h, uint32_t out_w) {
+    uint32_t size = U32(w_grad->size);
+    Runtime::Get().Launch1D("conv_backward_weight_kernel", w_grad->size,
+                            [&](auto &encoder) {
+                                SetBuffer(encoder, 0, x);
+                                SetBuffer(encoder, 1, out_grad);
+                                SetBuffer(encoder, 2, *w_grad);
+                                SetValue(encoder, 3, n);
+                                SetValue(encoder, 4, h);
+                                SetValue(encoder, 5, width);
+                                SetValue(encoder, 6, cin);
+                                SetValue(encoder, 7, kernel);
+                                SetValue(encoder, 8, cout);
+                                SetValue(encoder, 9, stride);
+                                SetValue(encoder, 10, padding);
+                                SetValue(encoder, 11, out_h);
+                                SetValue(encoder, 12, out_w);
+                                SetValue(encoder, 13, size);
+                            });
+}
+
 constexpr const char *kBinaryOps[] = {
     "ewise_add",     "ewise_mul", "ewise_div",
     "ewise_maximum", "ewise_eq",  "ewise_ge",
@@ -421,4 +493,7 @@ PYBIND11_MODULE(ndarray_backend, m) {
     }
 
     m.def("matmul", Matmul);
+    m.def("conv_forward", ConvForward);
+    m.def("conv_backward_input", ConvBackwardInput);
+    m.def("conv_backward_weight", ConvBackwardWeight);
 }

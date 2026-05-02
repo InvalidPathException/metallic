@@ -258,3 +258,124 @@ kernel void reduce_max(const device float *a [[buffer(0)]],
         out[gid] = maxv;
     }
 }
+
+kernel void conv_forward_kernel(
+    const device float *x [[buffer(0)]], const device float *w [[buffer(1)]],
+    device float *out [[buffer(2)]], constant uint &N [[buffer(3)]],
+    constant uint &H [[buffer(4)]], constant uint &W [[buffer(5)]],
+    constant uint &Cin [[buffer(6)]], constant uint &K [[buffer(7)]],
+    constant uint &Cout [[buffer(8)]], constant uint &stride [[buffer(9)]],
+    constant uint &padding [[buffer(10)]], constant uint &Hout [[buffer(11)]],
+    constant uint &Wout [[buffer(12)]], constant uint &size [[buffer(13)]],
+    uint gid [[thread_position_in_grid]]) {
+    if (gid >= size)
+        return;
+
+    uint co = gid % Cout;
+    uint next = gid / Cout;
+    uint ow = next % Wout;
+    next /= Wout;
+    uint oh = next % Hout;
+    uint n = next / Hout;
+
+    float acc = 0.0f;
+    for (uint kh = 0; kh < K; ++kh) {
+        int ih = int(oh * stride + kh) - int(padding);
+        if (ih < 0 || ih >= int(H))
+            continue;
+        for (uint kw = 0; kw < K; ++kw) {
+            int iw = int(ow * stride + kw) - int(padding);
+            if (iw < 0 || iw >= int(W))
+                continue;
+            for (uint ci = 0; ci < Cin; ++ci) {
+                uint x_idx = ((n * H + uint(ih)) * W + uint(iw)) * Cin + ci;
+                uint w_idx = ((kh * K + kw) * Cin + ci) * Cout + co;
+                acc += x[x_idx] * w[w_idx];
+            }
+        }
+    }
+    out[gid] = acc;
+}
+
+kernel void conv_backward_input_kernel(
+    const device float *out_grad [[buffer(0)]],
+    const device float *w [[buffer(1)]], device float *x_grad [[buffer(2)]],
+    constant uint &N [[buffer(3)]], constant uint &H [[buffer(4)]],
+    constant uint &W [[buffer(5)]], constant uint &Cin [[buffer(6)]],
+    constant uint &K [[buffer(7)]], constant uint &Cout [[buffer(8)]],
+    constant uint &stride [[buffer(9)]], constant uint &padding [[buffer(10)]],
+    constant uint &Hout [[buffer(11)]], constant uint &Wout [[buffer(12)]],
+    constant uint &size [[buffer(13)]], uint gid [[thread_position_in_grid]]) {
+    if (gid >= size)
+        return;
+
+    uint ci = gid % Cin;
+    uint next = gid / Cin;
+    uint iw = next % W;
+    next /= W;
+    uint ih = next % H;
+    uint n = next / H;
+
+    float acc = 0.0f;
+    for (uint kh = 0; kh < K; ++kh) {
+        int oh_numer = int(ih) + int(padding) - int(kh);
+        if (oh_numer < 0 || oh_numer % int(stride) != 0)
+            continue;
+        uint oh = uint(oh_numer / int(stride));
+        if (oh >= Hout)
+            continue;
+        for (uint kw = 0; kw < K; ++kw) {
+            int ow_numer = int(iw) + int(padding) - int(kw);
+            if (ow_numer < 0 || ow_numer % int(stride) != 0)
+                continue;
+            uint ow = uint(ow_numer / int(stride));
+            if (ow >= Wout)
+                continue;
+            for (uint co = 0; co < Cout; ++co) {
+                uint grad_idx = ((n * Hout + oh) * Wout + ow) * Cout + co;
+                uint w_idx = ((kh * K + kw) * Cin + ci) * Cout + co;
+                acc += out_grad[grad_idx] * w[w_idx];
+            }
+        }
+    }
+    x_grad[gid] = acc;
+}
+
+kernel void conv_backward_weight_kernel(
+    const device float *x [[buffer(0)]],
+    const device float *out_grad [[buffer(1)]],
+    device float *w_grad [[buffer(2)]], constant uint &N [[buffer(3)]],
+    constant uint &H [[buffer(4)]], constant uint &W [[buffer(5)]],
+    constant uint &Cin [[buffer(6)]], constant uint &K [[buffer(7)]],
+    constant uint &Cout [[buffer(8)]], constant uint &stride [[buffer(9)]],
+    constant uint &padding [[buffer(10)]], constant uint &Hout [[buffer(11)]],
+    constant uint &Wout [[buffer(12)]], constant uint &size [[buffer(13)]],
+    uint gid [[thread_position_in_grid]]) {
+    if (gid >= size)
+        return;
+
+    uint co = gid % Cout;
+    uint next = gid / Cout;
+    uint ci = next % Cin;
+    next /= Cin;
+    uint kw = next % K;
+    uint kh = next / K;
+
+    float acc = 0.0f;
+    for (uint n = 0; n < N; ++n) {
+        for (uint oh = 0; oh < Hout; ++oh) {
+            int ih = int(oh * stride + kh) - int(padding);
+            if (ih < 0 || ih >= int(H))
+                continue;
+            for (uint ow = 0; ow < Wout; ++ow) {
+                int iw = int(ow * stride + kw) - int(padding);
+                if (iw < 0 || iw >= int(W))
+                    continue;
+                uint x_idx = ((n * H + uint(ih)) * W + uint(iw)) * Cin + ci;
+                uint grad_idx = ((n * Hout + oh) * Wout + ow) * Cout + co;
+                acc += x[x_idx] * out_grad[grad_idx];
+            }
+        }
+    }
+    w_grad[gid] = acc;
+}

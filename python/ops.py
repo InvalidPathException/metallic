@@ -466,55 +466,70 @@ class Conv(TensorOp):
         self.padding = padding
 
     def compute(self, value, weight):
-        value = value.pad(
-            ((0, 0), (self.padding, self.padding), (self.padding, self.padding), (0, 0))
-        )
         batch, height, width, in_channels = value.shape
         kernel, _, _, out_channels = weight.shape
-        batch_stride, height_stride, width_stride, channel_stride = value.strides
-
-        out_height = (height - kernel) // self.stride + 1
-        out_width = (width - kernel) // self.stride + 1
-        inner = kernel * kernel * in_channels
-        cols = value.as_strided(
-            (batch, out_height, out_width, kernel, kernel, in_channels),
-            (
-                batch_stride,
-                height_stride * self.stride,
-                width_stride * self.stride,
-                height_stride,
-                width_stride,
-                channel_stride,
-            ),
-        ).compact()
-        out = cols.reshape((batch * out_height * out_width, inner)) @ weight.reshape(
-            (inner, out_channels)
+        out_height = (height + 2 * self.padding - kernel) // self.stride + 1
+        out_width = (width + 2 * self.padding - kernel) // self.stride + 1
+        out = nd.empty(
+            (batch, out_height, out_width, out_channels),
+            device=value.device,
         )
-        return out.reshape((batch, out_height, out_width, out_channels))
+        value.device.conv_forward(
+            value.compact()._handle,
+            weight.compact()._handle,
+            out._handle,
+            batch,
+            height,
+            width,
+            in_channels,
+            kernel,
+            out_channels,
+            self.stride,
+            self.padding,
+            out_height,
+            out_width,
+        )
+        return out
 
     def gradient(self, out_grad, node):
         value, weight = node.inputs
         batch, height, width, in_channels = value.shape
         kernel, _, _, out_channels = weight.shape
+        out_height, out_width = out_grad.shape[1], out_grad.shape[2]
 
-        grad_weight = conv(
-            transpose(transpose(value, (1, 2)), (0, 3)),
-            transpose(out_grad, (0, 2)),
-            stride=1,
-            padding=self.padding,
+        grad_value = nd.empty(value.shape, device=value.device)
+        grad_weight = nd.empty(weight.shape, device=weight.device)
+        value.device.conv_backward_input(
+            out_grad.realize_cached_data().compact()._handle,
+            weight.realize_cached_data().compact()._handle,
+            grad_value._handle,
+            batch,
+            height,
+            width,
+            in_channels,
+            kernel,
+            out_channels,
+            self.stride,
+            self.padding,
+            out_height,
+            out_width,
         )
-        grad_weight = transpose(grad_weight, (0, 2))
-
-        flipped_weight = transpose(flip(weight, (0, 1)), (2, 3))
-        grad = out_grad
-        if self.stride > 1:
-            grad = dilate(grad, (1, 2), self.stride - 1)
-        grad_value = conv(
-            grad, flipped_weight, stride=1, padding=kernel - self.padding - 1
+        value.device.conv_backward_weight(
+            value.realize_cached_data().compact()._handle,
+            out_grad.realize_cached_data().compact()._handle,
+            grad_weight._handle,
+            batch,
+            height,
+            width,
+            in_channels,
+            kernel,
+            out_channels,
+            self.stride,
+            self.padding,
+            out_height,
+            out_width,
         )
-        return grad_value.reshape(
-            (batch, height, width, in_channels)
-        ), grad_weight.reshape((kernel, kernel, in_channels, out_channels))
+        return Tensor(grad_value), Tensor(grad_weight)
 
 
 def conv(a: Tensor, b: Tensor, stride: int = 1, padding: int = 0):

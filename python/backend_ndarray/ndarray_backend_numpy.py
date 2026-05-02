@@ -115,3 +115,118 @@ def reduce_max(a, out, reduce_size):
 
 def reduce_sum(a, out, reduce_size):
     out.array[:] = a.array[:].reshape(-1, reduce_size).sum(axis=1)
+
+
+def _conv_out_shape(height, width, kernel, stride, padding):
+    return (
+        (height + 2 * padding - kernel) // stride + 1,
+        (width + 2 * padding - kernel) // stride + 1,
+    )
+
+
+def conv_forward(
+    x,
+    w,
+    out,
+    n,
+    height,
+    width,
+    in_channels,
+    kernel,
+    out_channels,
+    stride,
+    padding,
+    out_height,
+    out_width,
+):
+    x_view = x.array.reshape(n, height, width, in_channels)
+    w_view = w.array.reshape(kernel, kernel, in_channels, out_channels)
+    out_view = out.array.reshape(n, out_height, out_width, out_channels)
+    x_pad = np.pad(
+        x_view,
+        ((0, 0), (padding, padding), (padding, padding), (0, 0)),
+    )
+
+    for batch in range(n):
+        for oh in range(out_height):
+            for ow in range(out_width):
+                row = oh * stride
+                col = ow * stride
+                patch = x_pad[batch, row : row + kernel, col : col + kernel, :]
+                out_view[batch, oh, ow, :] = np.sum(
+                    patch[:, :, :, None] * w_view,
+                    axis=(0, 1, 2),
+                )
+
+
+def conv_backward_input(
+    out_grad,
+    w,
+    x_grad,
+    n,
+    height,
+    width,
+    in_channels,
+    kernel,
+    out_channels,
+    stride,
+    padding,
+    out_height,
+    out_width,
+):
+    out_grad_view = out_grad.array.reshape(n, out_height, out_width, out_channels)
+    w_view = w.array.reshape(kernel, kernel, in_channels, out_channels)
+    grad_pad = np.zeros(
+        (n, height + 2 * padding, width + 2 * padding, in_channels),
+        dtype=np.float32,
+    )
+
+    for batch in range(n):
+        for oh in range(out_height):
+            for ow in range(out_width):
+                row = oh * stride
+                col = ow * stride
+                for co in range(out_channels):
+                    grad_pad[batch, row : row + kernel, col : col + kernel, :] += (
+                        out_grad_view[batch, oh, ow, co] * w_view[:, :, :, co]
+                    )
+
+    if padding:
+        x_grad.array[:] = grad_pad[:, padding:-padding, padding:-padding, :].reshape(-1)
+    else:
+        x_grad.array[:] = grad_pad.reshape(-1)
+
+
+def conv_backward_weight(
+    x,
+    out_grad,
+    w_grad,
+    n,
+    height,
+    width,
+    in_channels,
+    kernel,
+    out_channels,
+    stride,
+    padding,
+    out_height,
+    out_width,
+):
+    x_view = x.array.reshape(n, height, width, in_channels)
+    out_grad_view = out_grad.array.reshape(n, out_height, out_width, out_channels)
+    x_pad = np.pad(
+        x_view,
+        ((0, 0), (padding, padding), (padding, padding), (0, 0)),
+    )
+    grad = np.zeros((kernel, kernel, in_channels, out_channels), dtype=np.float32)
+
+    for batch in range(n):
+        for oh in range(out_height):
+            for ow in range(out_width):
+                row = oh * stride
+                col = ow * stride
+                patch = x_pad[batch, row : row + kernel, col : col + kernel, :]
+                for co in range(out_channels):
+                    grad[:, :, :, co] += patch * out_grad_view[batch, oh, ow, co]
+
+    w_grad.array[:] = grad.reshape(-1)
