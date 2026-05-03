@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from autograd import Tensor, TensorOp, TensorTuple, TensorTupleOp
 import backend_ndarray as nd
+from tensor import Tensor, TensorOp, TensorTuple, TensorTupleOp
 
 
 class MakeTensorTuple(TensorTupleOp):
@@ -31,7 +31,8 @@ class TupleGetItem(TensorOp):
             return value.inputs[self.index]
         return Tensor.make_from_op(self, [value])
 
-    def compute(self, value):
+    def compute(self, *args):
+        (value,) = args
         return value[self.index]
 
     def gradient(self, out_grad, node):
@@ -76,7 +77,8 @@ def _sum_to_shape(grad: Tensor, shape: tuple[int, ...]) -> Tensor:
 
 
 class EWiseAdd(TensorOp):
-    def compute(self, a, b):
+    def compute(self, *args):
+        a, b = args
         return a + b
 
     def gradient(self, out_grad, node):
@@ -92,7 +94,8 @@ class AddScalar(TensorOp):
     def __init__(self, scalar):
         self.scalar = scalar
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return a + self.scalar
 
     def gradient(self, out_grad, node):
@@ -104,7 +107,8 @@ def add_scalar(a, scalar):
 
 
 class EWiseMul(TensorOp):
-    def compute(self, a, b):
+    def compute(self, *args):
+        a, b = args
         return a * b
 
     def gradient(self, out_grad, node):
@@ -123,7 +127,8 @@ class MulScalar(TensorOp):
     def __init__(self, scalar):
         self.scalar = scalar
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return a * self.scalar
 
     def gradient(self, out_grad, node):
@@ -135,7 +140,8 @@ def mul_scalar(a, scalar):
 
 
 class EWiseDiv(TensorOp):
-    def compute(self, a, b):
+    def compute(self, *args):
+        a, b = args
         return a / b
 
     def gradient(self, out_grad, node):
@@ -154,7 +160,8 @@ class DivScalar(TensorOp):
     def __init__(self, scalar):
         self.scalar = scalar
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return a / self.scalar
 
     def gradient(self, out_grad, node):
@@ -169,7 +176,8 @@ class PowerScalar(TensorOp):
     def __init__(self, scalar):
         self.scalar = scalar
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return a**self.scalar
 
     def gradient(self, out_grad, node):
@@ -182,7 +190,8 @@ def power_scalar(a, scalar):
 
 
 class Negate(TensorOp):
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return -a
 
     def gradient(self, out_grad, node):
@@ -194,7 +203,8 @@ def negate(a):
 
 
 class MatMul(TensorOp):
-    def compute(self, a, b):
+    def compute(self, *args):
+        a, b = args
         return a @ b
 
     def gradient(self, out_grad, node):
@@ -212,7 +222,8 @@ class Transpose(TensorOp):
     def __init__(self, axes=None):
         self.axes = axes
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         axes = list(range(len(a.shape)))
         if self.axes is None:
             axes[-1], axes[-2] = axes[-2], axes[-1]
@@ -233,7 +244,8 @@ class Reshape(TensorOp):
     def __init__(self, shape):
         self.shape = tuple(shape)
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return nd.reshape(a, self.shape)
 
     def gradient(self, out_grad, node):
@@ -248,7 +260,8 @@ class BroadcastTo(TensorOp):
     def __init__(self, shape):
         self.shape = tuple(shape)
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return nd.broadcast_to(a, self.shape).compact()
 
     def gradient(self, out_grad, node):
@@ -263,7 +276,8 @@ class Summation(TensorOp):
     def __init__(self, axes=None):
         self.axes = axes
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         axes = _normalize_axes(self.axes, len(a.shape))
         out = a
         for axis in sorted(axes, reverse=True):
@@ -280,7 +294,8 @@ def summation(a, axes=None):
 
 
 class Log(TensorOp):
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return nd.log(a)
 
     def gradient(self, out_grad, node):
@@ -292,7 +307,8 @@ def log(a):
 
 
 class Exp(TensorOp):
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return nd.exp(a)
 
     def gradient(self, out_grad, node):
@@ -304,7 +320,8 @@ def exp(a):
 
 
 class Tanh(TensorOp):
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return nd.tanh(a)
 
     def gradient(self, out_grad, node):
@@ -317,7 +334,8 @@ def tanh(a):
 
 
 class ReLU(TensorOp):
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         return nd.maximum(a, 0)
 
     def gradient(self, out_grad, node):
@@ -333,7 +351,8 @@ class LogSumExp(TensorOp):
     def __init__(self, axes=None):
         self.axes = axes
 
-    def compute(self, a):
+    def compute(self, *args):
+        (a,) = args
         keep_shape = _keepdims_shape(a.shape, self.axes)
         max_value = a.max(self.axes)
         shifted = a - nd.broadcast_to(nd.reshape(max_value, keep_shape), a.shape)
@@ -354,7 +373,8 @@ class Stack(TensorOp):
     def __init__(self, axis: int):
         self.axis = axis
 
-    def compute(self, values):
+    def compute(self, *args):
+        (values,) = args
         axis = self.axis if self.axis >= 0 else self.axis + len(values[0].shape) + 1
         count = len(values)
         out = nd.empty((count, values[0].size), device=values[0].device)
@@ -377,7 +397,8 @@ class Split(TensorTupleOp):
     def __init__(self, axis: int):
         self.axis = axis
 
-    def compute(self, value):
+    def compute(self, *args):
+        (value,) = args
         axis = self.axis if self.axis >= 0 else self.axis + len(value.shape)
         count = value.shape[axis]
         axes = list(range(len(value.shape)))
@@ -400,7 +421,8 @@ class Flip(TensorOp):
     def __init__(self, axes):
         self.axes = axes
 
-    def compute(self, value):
+    def compute(self, *args):
+        (value,) = args
         axes = tuple(range(len(value.shape))) if self.axes is None else self.axes
         return value.flip(axes)
 
@@ -417,7 +439,8 @@ class Dilate(TensorOp):
         self.axes = axes
         self.dilation = dilation
 
-    def compute(self, value):
+    def compute(self, *args):
+        (value,) = args
         axes = set(_normalize_axes(self.axes, len(value.shape)))
         shape = tuple(
             dim * (self.dilation + 1) if axis in axes else dim
@@ -444,7 +467,8 @@ class UnDilate(TensorOp):
         self.axes = axes
         self.dilation = dilation
 
-    def compute(self, value):
+    def compute(self, *args):
+        (value,) = args
         axes = set(_normalize_axes(self.axes, len(value.shape)))
         slices = tuple(
             slice(0, dim, self.dilation + 1) if axis in axes else slice(None)
@@ -465,7 +489,8 @@ class Conv(TensorOp):
         self.stride = stride
         self.padding = padding
 
-    def compute(self, value, weight):
+    def compute(self, *args):
+        value, weight = args
         batch, height, width, in_channels = value.shape
         kernel, _, _, out_channels = weight.shape
         out_height = (height + 2 * self.padding - kernel) // self.stride + 1

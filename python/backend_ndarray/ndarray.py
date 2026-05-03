@@ -1,5 +1,4 @@
 import operator
-from importlib import import_module
 from functools import reduce
 
 import numpy as np
@@ -7,7 +6,7 @@ import numpy as np
 from . import ndarray_backend_numpy
 
 try:
-    ndarray_backend_metal = import_module("ndarray_backend")
+    import ndarray_backend as ndarray_backend_metal  # ty: ignore[unresolved-import]
 except ImportError:
     ndarray_backend_metal = None
 
