@@ -9,7 +9,7 @@ from tensor import Tensor
 
 class Optimizer:
     def __init__(self, params: Iterable[Tensor]):
-        self.params = list(params)
+        self.params = [param for param in params if param.requires_grad]
 
     def step(self):
         raise NotImplementedError
