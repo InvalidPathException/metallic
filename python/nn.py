@@ -130,7 +130,8 @@ class Tanh(Module):
 
 class Sigmoid(Module):
     def forward(self, x: Tensor) -> Tensor:
-        return 1 / (1 + ops.exp(-x))
+        value = ops.exp(-x)
+        return value / (1 + value)
 
 
 class Sequential(Module):
@@ -308,6 +309,345 @@ class Embedding(Module):
         return (one_hot @ self.weight).reshape((seq_len, batch, self.embedding_dim))
 
 
+class RNNCell(Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        bias=True,
+        nonlinearity="tanh",
+        device=None,
+        dtype="float32",
+    ):
+        super().__init__()
+        if nonlinearity not in {"tanh", "relu"}:
+            raise ValueError("nonlinearity must be 'tanh' or 'relu'")
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.nonlinearity = nonlinearity
+        self.device = device
+        self.dtype = dtype
+        bound = hidden_size**-0.5
+        self.weight_ih = Parameter(
+            init.rand(
+                input_size,
+                hidden_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            )
+        )
+        self.weight_hh = Parameter(
+            init.rand(
+                hidden_size,
+                hidden_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            )
+        )
+        self.bias_ih = Parameter(
+            init.rand(
+                hidden_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            ),
+            requires_grad=bias,
+        )
+        self.bias_hh = Parameter(
+            init.rand(
+                hidden_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            ),
+            requires_grad=bias,
+        )
+        if not bias:
+            self.bias_ih.data = init.zeros(hidden_size, device=device, dtype=dtype)
+            self.bias_hh.data = init.zeros(hidden_size, device=device, dtype=dtype)
+
+    def forward(self, x: Tensor, h: Tensor | None = None) -> Tensor:
+        batch_size = x.shape[0]
+        if h is None:
+            h = init.zeros(
+                batch_size,
+                self.hidden_size,
+                device=x.device,
+                dtype=x.dtype,
+            )
+
+        out = x @ self.weight_ih + h @ self.weight_hh
+        bias_ih = self.bias_ih.reshape((1, self.hidden_size)).broadcast_to(out.shape)
+        bias_hh = self.bias_hh.reshape((1, self.hidden_size)).broadcast_to(out.shape)
+        out = out + bias_ih + bias_hh
+        return ops.relu(out) if self.nonlinearity == "relu" else ops.tanh(out)
+
+
+class RNN(Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        num_layers=1,
+        bias=True,
+        nonlinearity="tanh",
+        device=None,
+        dtype="float32",
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.device = device
+        self.dtype = dtype
+        self.layers = [
+            RNNCell(
+                input_size if layer == 0 else hidden_size,
+                hidden_size,
+                bias=bias,
+                nonlinearity=nonlinearity,
+                device=device,
+                dtype=dtype,
+            )
+            for layer in range(num_layers)
+        ]
+
+    def forward(self, x: Tensor, h0: Tensor | None = None):
+        seq_len, batch_size, _ = x.shape
+        if h0 is None:
+            h0 = init.zeros(
+                self.num_layers,
+                batch_size,
+                self.hidden_size,
+                device=x.device,
+                dtype=x.dtype,
+            )
+
+        inputs = tuple(ops.split(x, axis=0))
+        hidden = list(ops.split(h0, axis=0))
+        outputs = []
+        for step in range(seq_len):
+            layer_input = inputs[step]
+            for layer, cell in enumerate(self.layers):
+                layer_input = cell(layer_input, hidden[layer])
+                hidden[layer] = layer_input
+            outputs.append(layer_input)
+        return ops.stack(outputs, axis=0), ops.stack(hidden, axis=0)
+
+
+class LSTMCell(Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        bias=True,
+        device=None,
+        dtype="float32",
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.device = device
+        self.dtype = dtype
+        bound = hidden_size**-0.5
+        gate_size = 4 * hidden_size
+        self.weight_ih = Parameter(
+            init.rand(
+                input_size,
+                gate_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            )
+        )
+        self.weight_hh = Parameter(
+            init.rand(
+                hidden_size,
+                gate_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            )
+        )
+        self.bias_ih = Parameter(
+            init.rand(
+                gate_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            ),
+            requires_grad=bias,
+        )
+        self.bias_hh = Parameter(
+            init.rand(
+                gate_size,
+                low=-bound,
+                high=bound,
+                device=device,
+                dtype=dtype,
+            ),
+            requires_grad=bias,
+        )
+        if not bias:
+            self.bias_ih.data = init.zeros(gate_size, device=device, dtype=dtype)
+            self.bias_hh.data = init.zeros(gate_size, device=device, dtype=dtype)
+
+    def forward(self, x: Tensor, state: tuple[Tensor, Tensor] | None = None):
+        batch_size = x.shape[0]
+        if state is None:
+            h = init.zeros(
+                batch_size,
+                self.hidden_size,
+                device=x.device,
+                dtype=x.dtype,
+            )
+            c = init.zeros(
+                batch_size,
+                self.hidden_size,
+                device=x.device,
+                dtype=x.dtype,
+            )
+        else:
+            h, c = state
+
+        gates = x @ self.weight_ih + h @ self.weight_hh
+        bias_ih = self.bias_ih.reshape((1, 4 * self.hidden_size))
+        bias_hh = self.bias_hh.reshape((1, 4 * self.hidden_size))
+        gates = gates + bias_ih.broadcast_to(gates.shape)
+        gates = gates + bias_hh.broadcast_to(gates.shape)
+        gates = gates.reshape((batch_size, 4, self.hidden_size))
+        input_gate, forget_gate, cell_gate, output_gate = tuple(
+            ops.split(gates, axis=1)
+        )
+
+        input_gate = Sigmoid()(input_gate)
+        forget_gate = Sigmoid()(forget_gate)
+        cell_gate = ops.tanh(cell_gate)
+        output_gate = Sigmoid()(output_gate)
+        next_c = forget_gate * c + input_gate * cell_gate
+        next_h = output_gate * ops.tanh(next_c)
+        return next_h, next_c
+
+
+class LSTM(Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        num_layers=1,
+        bias=True,
+        device=None,
+        dtype="float32",
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.device = device
+        self.dtype = dtype
+        self.layers = [
+            LSTMCell(
+                input_size if layer == 0 else hidden_size,
+                hidden_size,
+                bias=bias,
+                device=device,
+                dtype=dtype,
+            )
+            for layer in range(num_layers)
+        ]
+
+    def forward(self, x: Tensor, state: tuple[Tensor, Tensor] | None = None):
+        seq_len, batch_size, _ = x.shape
+        if state is None:
+            h0 = init.zeros(
+                self.num_layers,
+                batch_size,
+                self.hidden_size,
+                device=x.device,
+                dtype=x.dtype,
+            )
+            c0 = init.zeros(
+                self.num_layers,
+                batch_size,
+                self.hidden_size,
+                device=x.device,
+                dtype=x.dtype,
+            )
+        else:
+            h0, c0 = state
+
+        inputs = tuple(ops.split(x, axis=0))
+        hidden = list(ops.split(h0, axis=0))
+        cells = list(ops.split(c0, axis=0))
+        outputs = []
+        for step in range(seq_len):
+            layer_input = inputs[step]
+            for layer, cell in enumerate(self.layers):
+                next_h, next_c = cell(layer_input, (hidden[layer], cells[layer]))
+                hidden[layer] = next_h
+                cells[layer] = next_c
+                layer_input = next_h
+            outputs.append(layer_input)
+        return ops.stack(outputs, axis=0), (
+            ops.stack(hidden, axis=0),
+            ops.stack(cells, axis=0),
+        )
+
+
+class LanguageModel(Module):
+    def __init__(
+        self,
+        embedding_size,
+        output_size,
+        hidden_size,
+        num_layers=1,
+        seq_model="rnn",
+        device=None,
+        dtype="float32",
+    ):
+        super().__init__()
+        if seq_model == "rnn":
+            self.sequence = RNN(
+                embedding_size,
+                hidden_size,
+                num_layers=num_layers,
+                device=device,
+                dtype=dtype,
+            )
+        elif seq_model == "lstm":
+            self.sequence = LSTM(
+                embedding_size,
+                hidden_size,
+                num_layers=num_layers,
+                device=device,
+                dtype=dtype,
+            )
+        else:
+            raise ValueError("seq_model must be 'rnn' or 'lstm'")
+
+        self.embedding = Embedding(
+            output_size, embedding_size, device=device, dtype=dtype
+        )
+        self.linear = Linear(hidden_size, output_size, device=device, dtype=dtype)
+
+    def forward(self, x: Tensor, state=None):
+        embedded = self.embedding(x)
+        output, next_state = self.sequence(embedded, state)
+        seq_len, batch_size, hidden_size = output.shape
+        logits = self.linear(output.reshape((seq_len * batch_size, hidden_size)))
+        return logits, next_state
+
+
 __all__ = [
     "BatchNorm1d",
     "BatchNorm2d",
@@ -316,10 +656,15 @@ __all__ = [
     "Embedding",
     "Flatten",
     "Identity",
+    "LSTM",
+    "LSTMCell",
+    "LanguageModel",
     "LayerNorm1d",
     "Linear",
     "Module",
     "Parameter",
+    "RNN",
+    "RNNCell",
     "ReLU",
     "Residual",
     "Sequential",
