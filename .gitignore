@@ -4,3 +4,5 @@ build/
 **/__pycache__/
 example_resnet/cifar-10-batches-py/
 example_resnet/*.tar.gz
+example_lstm/ptb/
+**/.DS_Store

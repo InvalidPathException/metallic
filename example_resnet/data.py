@@ -44,10 +44,7 @@ def ensure_cifar10(example_dir: str | os.PathLike[str]) -> Path:
             archive.write_bytes(response.read())
 
     with tarfile.open(archive, "r:gz") as tar:
-        if sys.version_info >= (3, 12):
-            tar.extractall(base, filter="data")
-        else:
-            tar.extractall(base)
+        tar.extractall(base, filter="data")
 
     if not _cifar10_batches_ready(data_dir):
         raise RuntimeError(
