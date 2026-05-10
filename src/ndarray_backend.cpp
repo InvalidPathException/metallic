@@ -316,6 +316,54 @@ void Matmul(const Array &a, const Array &b, Array *out, uint32_t rows,
                                         });
 }
 
+void BatchedMatmul(const Array &a, const Array &b, Array *out, uint32_t batch,
+                   uint32_t rows, uint32_t inner, uint32_t cols) {
+    Runtime::Get().Launch1D("batched_matmul_kernel", out->size,
+                            [&](auto &encoder) {
+                                SetBuffer(encoder, 0, a);
+                                SetBuffer(encoder, 1, b);
+                                SetBuffer(encoder, 2, *out);
+                                SetValue(encoder, 3, batch);
+                                SetValue(encoder, 4, rows);
+                                SetValue(encoder, 5, inner);
+                                SetValue(encoder, 6, cols);
+                            });
+}
+
+void LastAxisOp(const char *kernel, const Array &a, Array *out, uint32_t cols,
+                uint32_t rows) {
+    Runtime::Get().Launch1D(kernel, rows, [&](auto &encoder) {
+        SetBuffer(encoder, 0, a);
+        SetBuffer(encoder, 1, *out);
+        SetValue(encoder, 2, cols);
+        SetValue(encoder, 3, rows);
+    });
+}
+
+void DropoutApply(const Array &a, const Array &mask, Array *out,
+                  Scalar keep_prob) {
+    uint32_t size = U32(out->size);
+    Runtime::Get().Launch1D("dropout_apply_kernel", out->size,
+                            [&](auto &encoder) {
+                                SetBuffer(encoder, 0, a);
+                                SetBuffer(encoder, 1, mask);
+                                SetBuffer(encoder, 2, *out);
+                                SetValue(encoder, 3, keep_prob);
+                                SetValue(encoder, 4, size);
+                            });
+}
+
+void Embedding(const Array &weight, const Array &indices, Array *out,
+               uint32_t count, uint32_t dim) {
+    Runtime::Get().Launch1D("embedding_kernel", out->size, [&](auto &encoder) {
+        SetBuffer(encoder, 0, weight);
+        SetBuffer(encoder, 1, indices);
+        SetBuffer(encoder, 2, *out);
+        SetValue(encoder, 3, count);
+        SetValue(encoder, 4, dim);
+    });
+}
+
 void ConvForward(const Array &x, const Array &w, Array *out, uint32_t n,
                  uint32_t h, uint32_t width, uint32_t cin, uint32_t kernel,
                  uint32_t cout, uint32_t stride, uint32_t padding,
@@ -402,6 +450,7 @@ constexpr const char *kUnaryOps[] = {
     "ewise_log",
     "ewise_exp",
     "ewise_tanh",
+    "ewise_gelu",
 };
 
 constexpr const char *kReduceOps[] = {
@@ -493,6 +542,21 @@ PYBIND11_MODULE(ndarray_backend, m) {
     }
 
     m.def("matmul", Matmul);
+    m.def("batched_matmul", BatchedMatmul);
+    m.def("logsumexp_last_axis",
+          [](const Array &a, Array *out, uint32_t cols, uint32_t rows) {
+              LastAxisOp("logsumexp_last_axis_kernel", a, out, cols, rows);
+          });
+    m.def("softmax_last_axis",
+          [](const Array &a, Array *out, uint32_t cols, uint32_t rows) {
+              LastAxisOp("softmax_last_axis_kernel", a, out, cols, rows);
+          });
+    m.def("causal_softmax",
+          [](const Array &a, Array *out, uint32_t seq_len, uint32_t rows) {
+              LastAxisOp("causal_softmax_kernel", a, out, seq_len, rows);
+          });
+    m.def("dropout_apply", DropoutApply);
+    m.def("embedding", Embedding);
     m.def("conv_forward", ConvForward);
     m.def("conv_backward_input", ConvBackwardInput);
     m.def("conv_backward_weight", ConvBackwardWeight);

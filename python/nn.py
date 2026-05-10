@@ -128,6 +128,11 @@ class Tanh(Module):
         return ops.tanh(x)
 
 
+class GeLU(Module):
+    def forward(self, x: Tensor) -> Tensor:
+        return ops.gelu(x)
+
+
 class Sigmoid(Module):
     def forward(self, x: Tensor) -> Tensor:
         value = ops.exp(-x)
@@ -233,7 +238,7 @@ class Dropout(Module):
         if not self.training or self.p == 0:
             return x
         mask = init.randb(*x.shape, p=1 - self.p, device=x.device, dtype=x.dtype)
-        return x * mask / (1 - self.p)
+        return ops.dropout_apply(x, mask, 1 - self.p)
 
 
 class Residual(Module):
@@ -299,14 +304,7 @@ class Embedding(Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        seq_len, batch = x.shape
-        one_hot = init.one_hot(
-            self.num_embeddings,
-            x.reshape((seq_len * batch,)),
-            device=self.device,
-            dtype=self.dtype,
-        )
-        return (one_hot @ self.weight).reshape((seq_len, batch, self.embedding_dim))
+        return ops.embedding(self.weight, x)
 
 
 class RNNCell(Module):
@@ -655,6 +653,7 @@ __all__ = [
     "Dropout",
     "Embedding",
     "Flatten",
+    "GeLU",
     "Identity",
     "LSTM",
     "LSTMCell",

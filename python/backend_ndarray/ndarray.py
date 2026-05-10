@@ -354,6 +354,11 @@ class NDArray:
         self.device.ewise_tanh(self.compact()._handle, out._handle)
         return out
 
+    def gelu(self):
+        out = NDArray.make(self.shape, device=self.device)
+        self.device.ewise_gelu(self.compact()._handle, out._handle)
+        return out
+
     def __matmul__(self, other):
         assert self.ndim == 2 and other.ndim == 2
         assert self.shape[1] == other.shape[0]
@@ -366,6 +371,78 @@ class NDArray:
             rows,
             inner,
             cols,
+        )
+        return out
+
+    def batched_matmul(self, other):
+        assert self.ndim == 3 and other.ndim == 3
+        assert self.shape[0] == other.shape[0]
+        assert self.shape[2] == other.shape[1]
+        batch, rows, inner, cols = (
+            self.shape[0],
+            self.shape[1],
+            self.shape[2],
+            other.shape[2],
+        )
+        out = NDArray.make((batch, rows, cols), device=self.device)
+        self.device.batched_matmul(
+            self.compact()._handle,
+            other.compact()._handle,
+            out._handle,
+            batch,
+            rows,
+            inner,
+            cols,
+        )
+        return out
+
+    def logsumexp_last_axis(self):
+        assert self.ndim >= 1
+        cols = self.shape[-1]
+        rows = self.size // cols
+        out = NDArray.make(self.shape[:-1], device=self.device)
+        self.device.logsumexp_last_axis(self.compact()._handle, out._handle, cols, rows)
+        return out
+
+    def softmax_last_axis(self):
+        assert self.ndim >= 1
+        cols = self.shape[-1]
+        rows = self.size // cols
+        out = NDArray.make(self.shape, device=self.device)
+        self.device.softmax_last_axis(self.compact()._handle, out._handle, cols, rows)
+        return out
+
+    def causal_softmax(self):
+        assert self.ndim >= 2
+        seq_len = self.shape[-1]
+        assert self.shape[-2] == seq_len
+        rows = self.size // seq_len
+        out = NDArray.make(self.shape, device=self.device)
+        self.device.causal_softmax(self.compact()._handle, out._handle, seq_len, rows)
+        return out
+
+    def dropout_apply(self, mask, keep_prob):
+        assert self.shape == mask.shape
+        out = NDArray.make(self.shape, device=self.device)
+        self.device.dropout_apply(
+            self.compact()._handle,
+            mask.compact()._handle,
+            out._handle,
+            keep_prob,
+        )
+        return out
+
+    def embedding(self, indices):
+        assert self.ndim == 2
+        count = indices.size
+        dim = self.shape[1]
+        out = NDArray.make((*indices.shape, dim), device=self.device)
+        self.device.embedding(
+            self.compact()._handle,
+            indices.compact()._handle,
+            out._handle,
+            count,
+            dim,
         )
         return out
 
@@ -463,6 +540,34 @@ def exp(a):
 
 def tanh(a):
     return a.tanh()
+
+
+def gelu(a):
+    return a.gelu()
+
+
+def batched_matmul(a, b):
+    return a.batched_matmul(b)
+
+
+def logsumexp_last_axis(a):
+    return a.logsumexp_last_axis()
+
+
+def softmax_last_axis(a):
+    return a.softmax_last_axis()
+
+
+def causal_softmax(a):
+    return a.causal_softmax()
+
+
+def dropout_apply(a, mask, keep_prob):
+    return a.dropout_apply(mask, keep_prob)
+
+
+def embedding(weight, indices):
+    return weight.embedding(indices)
 
 
 def flip(a, axes):

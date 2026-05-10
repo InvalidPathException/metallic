@@ -324,6 +324,8 @@ def compute_gradients(output: Tensor, out_grad: Tensor):
     node_to_grads: dict[Value, list[Tensor]] = {output: [out_grad]}
 
     for node in reversed(find_topo_sort([output])):
+        if node not in node_to_grads:
+            continue
         grad = sum_tensors(node_to_grads[node])
         node.grad = grad
 

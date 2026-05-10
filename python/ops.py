@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
+
+import numpy as np
 
 import backend_ndarray as nd
 from tensor import Tensor, TensorOp, TensorTuple, TensorTupleOp
@@ -218,6 +221,28 @@ def matmul(a, b):
     return MatMul()(a, b)
 
 
+def _transpose_last_two(tensor: Tensor) -> Tensor:
+    ndim = len(tensor.shape)
+    return transpose(tensor, (ndim - 2, ndim - 1))
+
+
+class BatchedMatMul(TensorOp):
+    def compute(self, *args):
+        a, b = args
+        return nd.batched_matmul(a, b)
+
+    def gradient(self, out_grad, node):
+        lhs, rhs = node.inputs
+        return (
+            batched_matmul(out_grad, _transpose_last_two(rhs)),
+            batched_matmul(_transpose_last_two(lhs), out_grad),
+        )
+
+
+def batched_matmul(a, b):
+    return BatchedMatMul()(a, b)
+
+
 class Transpose(TensorOp):
     def __init__(self, axes=None):
         self.axes = axes
@@ -333,6 +358,25 @@ def tanh(a):
     return Tanh()(a)
 
 
+class GeLU(TensorOp):
+    def compute(self, *args):
+        (a,) = args
+        return nd.gelu(a)
+
+    def gradient(self, out_grad, node):
+        x = node.inputs[0]
+        coeff = math.sqrt(2 / math.pi)
+        inner = coeff * (x + 0.044715 * x**3)
+        tanh_inner = tanh(inner)
+        inner_grad = coeff * (1 + 3 * 0.044715 * x**2)
+        grad = 0.5 * (1 + tanh_inner) + 0.5 * x * (1 - tanh_inner**2) * inner_grad
+        return out_grad * grad
+
+
+def gelu(a):
+    return GeLU()(a)
+
+
 class ReLU(TensorOp):
     def compute(self, *args):
         (a,) = args
@@ -367,6 +411,57 @@ class LogSumExp(TensorOp):
 
 def logsumexp(a, axes=None):
     return LogSumExp(axes)(a)
+
+
+class LogSumExpLastAxis(TensorOp):
+    def compute(self, *args):
+        (a,) = args
+        return nd.logsumexp_last_axis(a)
+
+    def gradient(self, out_grad, node):
+        value = node.inputs[0]
+        keep_shape = (*value.shape[:-1], 1)
+        logsum = reshape(node, keep_shape).broadcast_to(value.shape)
+        grad = reshape(out_grad, keep_shape).broadcast_to(value.shape)
+        return grad * exp(value - logsum)
+
+
+def logsumexp_last_axis(a):
+    return LogSumExpLastAxis()(a)
+
+
+class SoftmaxLastAxis(TensorOp):
+    def compute(self, *args):
+        (a,) = args
+        return nd.softmax_last_axis(a)
+
+    def gradient(self, out_grad, node):
+        value = node
+        correction = summation(out_grad * value, axes=len(value.shape) - 1)
+        correction = reshape(correction, (*value.shape[:-1], 1))
+        correction = correction.broadcast_to(value.shape)
+        return value * (out_grad - correction)
+
+
+def softmax_last_axis(a):
+    return SoftmaxLastAxis()(a)
+
+
+class CausalSoftmax(TensorOp):
+    def compute(self, *args):
+        (a,) = args
+        return nd.causal_softmax(a)
+
+    def gradient(self, out_grad, node):
+        value = node
+        correction = summation(out_grad * value, axes=len(value.shape) - 1)
+        correction = reshape(correction, (*value.shape[:-1], 1))
+        correction = correction.broadcast_to(value.shape)
+        return value * (out_grad - correction)
+
+
+def causal_softmax(a):
+    return CausalSoftmax()(a)
 
 
 class Stack(TensorOp):
@@ -559,3 +654,39 @@ class Conv(TensorOp):
 
 def conv(a: Tensor, b: Tensor, stride: int = 1, padding: int = 0):
     return Conv(stride, padding)(a, b)
+
+
+class DropoutApply(TensorOp):
+    def __init__(self, keep_prob: float):
+        self.keep_prob = keep_prob
+
+    def compute(self, *args):
+        value, mask = args
+        return nd.dropout_apply(value, mask, self.keep_prob)
+
+    def gradient(self, out_grad, node):
+        _, mask = node.inputs
+        return dropout_apply(out_grad, mask, self.keep_prob), None
+
+
+def dropout_apply(value: Tensor, mask: Tensor, keep_prob: float):
+    return DropoutApply(keep_prob)(value, mask)
+
+
+class EmbeddingLookup(TensorOp):
+    def compute(self, *args):
+        weight, indices = args
+        return nd.embedding(weight, indices)
+
+    def gradient(self, out_grad, node):
+        weight, indices = node.inputs
+        vocab_size, dim = weight.shape
+        flat_indices = indices.numpy().astype("int32").reshape(-1)
+        one_hot = np.eye(vocab_size, dtype="float32")[flat_indices]
+        one_hot = Tensor(one_hot, device=out_grad.device, requires_grad=False)
+        grad = out_grad.reshape((flat_indices.size, dim))
+        return one_hot.transpose() @ grad, None
+
+
+def embedding(weight: Tensor, indices: Tensor):
+    return EmbeddingLookup()(weight, indices)

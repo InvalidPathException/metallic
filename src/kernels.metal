@@ -202,6 +202,17 @@ kernel void ewise_tanh(const device float *a [[buffer(0)]],
         out[gid] = tanh(a[gid]);
 }
 
+kernel void ewise_gelu(const device float *a [[buffer(0)]],
+                       device float *out [[buffer(1)]],
+                       constant uint &size [[buffer(2)]],
+                       uint gid [[thread_position_in_grid]]) {
+    if (gid < size) {
+        float x = a[gid];
+        float inner = 0.7978845608f * (x + 0.044715f * x * x * x);
+        out[gid] = 0.5f * x * (1.0f + tanh(inner));
+    }
+}
+
 kernel void matmul_kernel(const device float *a [[buffer(0)]],
                           const device float *b [[buffer(1)]],
                           device float *out [[buffer(2)]],
@@ -233,6 +244,25 @@ kernel void matmul_kernel(const device float *a [[buffer(0)]],
         out[row * P + col] = acc;
 }
 
+kernel void batched_matmul_kernel(
+    const device float *a [[buffer(0)]], const device float *b [[buffer(1)]],
+    device float *out [[buffer(2)]], constant uint &B [[buffer(3)]],
+    constant uint &M [[buffer(4)]], constant uint &N [[buffer(5)]],
+    constant uint &P [[buffer(6)]], uint gid [[thread_position_in_grid]]) {
+    uint size = B * M * P;
+    if (gid >= size)
+        return;
+    uint col = gid % P;
+    uint row = (gid / P) % M;
+    uint batch = gid / (M * P);
+    float acc = 0.0f;
+    uint a_base = batch * M * N + row * N;
+    uint b_base = batch * N * P + col;
+    for (uint k = 0; k < N; ++k)
+        acc += a[a_base + k] * b[b_base + k * P];
+    out[gid] = acc;
+}
+
 kernel void reduce_sum(const device float *a [[buffer(0)]],
                        device float *out [[buffer(1)]],
                        constant uint &reduce_size [[buffer(2)]],
@@ -257,6 +287,85 @@ kernel void reduce_max(const device float *a [[buffer(0)]],
             maxv = max(maxv, a[gid * reduce_size + i]);
         out[gid] = maxv;
     }
+}
+
+kernel void logsumexp_last_axis_kernel(const device float *a [[buffer(0)]],
+                                       device float *out [[buffer(1)]],
+                                       constant uint &cols [[buffer(2)]],
+                                       constant uint &rows [[buffer(3)]],
+                                       uint gid [[thread_position_in_grid]]) {
+    if (gid >= rows)
+        return;
+    uint base = gid * cols;
+    float maxv = a[base];
+    for (uint col = 1; col < cols; ++col)
+        maxv = max(maxv, a[base + col]);
+    float sum = 0.0f;
+    for (uint col = 0; col < cols; ++col)
+        sum += exp(a[base + col] - maxv);
+    out[gid] = log(sum) + maxv;
+}
+
+kernel void softmax_last_axis_kernel(const device float *a [[buffer(0)]],
+                                     device float *out [[buffer(1)]],
+                                     constant uint &cols [[buffer(2)]],
+                                     constant uint &rows [[buffer(3)]],
+                                     uint gid [[thread_position_in_grid]]) {
+    if (gid >= rows)
+        return;
+    uint base = gid * cols;
+    float maxv = a[base];
+    for (uint col = 1; col < cols; ++col)
+        maxv = max(maxv, a[base + col]);
+    float sum = 0.0f;
+    for (uint col = 0; col < cols; ++col)
+        sum += exp(a[base + col] - maxv);
+    for (uint col = 0; col < cols; ++col)
+        out[base + col] = exp(a[base + col] - maxv) / sum;
+}
+
+kernel void causal_softmax_kernel(const device float *a [[buffer(0)]],
+                                  device float *out [[buffer(1)]],
+                                  constant uint &seq_len [[buffer(2)]],
+                                  constant uint &rows [[buffer(3)]],
+                                  uint gid [[thread_position_in_grid]]) {
+    if (gid >= rows)
+        return;
+    uint query = gid % seq_len;
+    uint base = gid * seq_len;
+    float maxv = a[base];
+    for (uint col = 1; col <= query; ++col)
+        maxv = max(maxv, a[base + col]);
+    float sum = 0.0f;
+    for (uint col = 0; col <= query; ++col)
+        sum += exp(a[base + col] - maxv);
+    for (uint col = 0; col < seq_len; ++col)
+        out[base + col] = col <= query ? exp(a[base + col] - maxv) / sum : 0.0f;
+}
+
+kernel void dropout_apply_kernel(const device float *a [[buffer(0)]],
+                                 const device float *mask [[buffer(1)]],
+                                 device float *out [[buffer(2)]],
+                                 constant float &keep_prob [[buffer(3)]],
+                                 constant uint &size [[buffer(4)]],
+                                 uint gid [[thread_position_in_grid]]) {
+    if (gid < size)
+        out[gid] = a[gid] * mask[gid] / keep_prob;
+}
+
+kernel void embedding_kernel(const device float *weight [[buffer(0)]],
+                             const device float *indices [[buffer(1)]],
+                             device float *out [[buffer(2)]],
+                             constant uint &count [[buffer(3)]],
+                             constant uint &dim [[buffer(4)]],
+                             uint gid [[thread_position_in_grid]]) {
+    uint size = count * dim;
+    if (gid >= size)
+        return;
+    uint token = gid / dim;
+    uint feature = gid % dim;
+    uint index = uint(indices[token]);
+    out[gid] = weight[index * dim + feature];
 }
 
 kernel void conv_forward_kernel(

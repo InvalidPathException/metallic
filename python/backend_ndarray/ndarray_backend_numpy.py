@@ -105,8 +105,53 @@ def ewise_tanh(a, out):
     out.array[:] = np.tanh(a.array)
 
 
+def ewise_gelu(a, out):
+    x = a.array
+    out.array[:] = 0.5 * x * (1 + np.tanh(0.7978845608 * (x + 0.044715 * x**3)))
+
+
 def matmul(a, b, out, m, n, p):
     out.array[:] = (a.array.reshape(m, n) @ b.array.reshape(n, p)).reshape(-1)
+
+
+def batched_matmul(a, b, out, batch, m, n, p):
+    lhs = a.array.reshape(batch, m, n)
+    rhs = b.array.reshape(batch, n, p)
+    out.array[:] = np.matmul(lhs, rhs).reshape(-1)
+
+
+def logsumexp_last_axis(a, out, cols, rows):
+    values = a.array.reshape(rows, cols)
+    max_values = values.max(axis=1, keepdims=True)
+    out.array[:] = np.log(np.exp(values - max_values).sum(axis=1)) + max_values[:, 0]
+
+
+def softmax_last_axis(a, out, cols, rows):
+    values = a.array.reshape(rows, cols)
+    max_values = values.max(axis=1, keepdims=True)
+    exp_values = np.exp(values - max_values)
+    out.array[:] = (exp_values / exp_values.sum(axis=1, keepdims=True)).reshape(-1)
+
+
+def causal_softmax(a, out, seq_len, rows):
+    values = a.array.reshape(rows, seq_len)
+    result = np.zeros_like(values)
+    for row in range(rows):
+        query = row % seq_len
+        visible = values[row, : query + 1]
+        max_value = visible.max()
+        exp_values = np.exp(visible - max_value)
+        result[row, : query + 1] = exp_values / exp_values.sum()
+    out.array[:] = result.reshape(-1)
+
+
+def dropout_apply(a, mask, out, keep_prob):
+    out.array[:] = a.array * mask.array / keep_prob
+
+
+def embedding(weight, indices, out, count, dim):
+    idx = indices.array[:count].astype(np.int32)
+    out.array[:] = weight.array.reshape(-1, dim)[idx].reshape(-1)
 
 
 def reduce_max(a, out, reduce_size):
