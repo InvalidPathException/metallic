@@ -154,6 +154,13 @@ def embedding(weight, indices, out, count, dim):
     out.array[:] = weight.array.reshape(-1, dim)[idx].reshape(-1)
 
 
+def embedding_backward(out_grad, indices, weight_grad, count, dim):
+    weight_grad.array.fill(0)
+    idx = indices.array[:count].astype(np.int32)
+    grad = out_grad.array.reshape(count, dim)
+    np.add.at(weight_grad.array.reshape(-1, dim), idx, grad)
+
+
 def reduce_max(a, out, reduce_size):
     out.array[:] = a.array[:].reshape(-1, reduce_size).max(axis=1)
 

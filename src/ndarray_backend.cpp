@@ -364,6 +364,18 @@ void Embedding(const Array &weight, const Array &indices, Array *out,
     });
 }
 
+void EmbeddingBackward(const Array &out_grad, const Array &indices,
+                       Array *weight_grad, uint32_t count, uint32_t dim) {
+    Runtime::Get().Launch1D("embedding_backward_kernel", out_grad.size,
+                            [&](auto &encoder) {
+                                SetBuffer(encoder, 0, out_grad);
+                                SetBuffer(encoder, 1, indices);
+                                SetBuffer(encoder, 2, *weight_grad);
+                                SetValue(encoder, 3, count);
+                                SetValue(encoder, 4, dim);
+                            });
+}
+
 void ConvForward(const Array &x, const Array &w, Array *out, uint32_t n,
                  uint32_t h, uint32_t width, uint32_t cin, uint32_t kernel,
                  uint32_t cout, uint32_t stride, uint32_t padding,
@@ -557,6 +569,7 @@ PYBIND11_MODULE(ndarray_backend, m) {
           });
     m.def("dropout_apply", DropoutApply);
     m.def("embedding", Embedding);
+    m.def("embedding_backward", EmbeddingBackward);
     m.def("conv_forward", ConvForward);
     m.def("conv_backward_input", ConvBackwardInput);
     m.def("conv_backward_weight", ConvBackwardWeight);

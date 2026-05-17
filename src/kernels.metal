@@ -368,6 +368,24 @@ kernel void embedding_kernel(const device float *weight [[buffer(0)]],
     out[gid] = weight[index * dim + feature];
 }
 
+kernel void embedding_backward_kernel(const device float *out_grad
+                                      [[buffer(0)]],
+                                      const device float *indices [[buffer(1)]],
+                                      device atomic_float *weight_grad
+                                      [[buffer(2)]],
+                                      constant uint &count [[buffer(3)]],
+                                      constant uint &dim [[buffer(4)]],
+                                      uint gid [[thread_position_in_grid]]) {
+    uint size = count * dim;
+    if (gid >= size)
+        return;
+    uint token = gid / dim;
+    uint feature = gid % dim;
+    uint index = uint(indices[token]);
+    atomic_fetch_add_explicit(&weight_grad[index * dim + feature],
+                              out_grad[gid], memory_order_relaxed);
+}
+
 kernel void conv_forward_kernel(
     const device float *x [[buffer(0)]], const device float *w [[buffer(1)]],
     device float *out [[buffer(2)]], constant uint &N [[buffer(3)]],

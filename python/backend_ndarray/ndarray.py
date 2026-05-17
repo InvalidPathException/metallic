@@ -446,6 +446,22 @@ class NDArray:
         )
         return out
 
+    def embedding_backward(self, indices, weight_shape):
+        assert self.ndim >= 1
+        assert weight_shape[-1] == self.shape[-1]
+        count = indices.size
+        dim = self.shape[-1]
+        out = NDArray.make(weight_shape, device=self.device)
+        out.fill(0)
+        self.device.embedding_backward(
+            self.compact()._handle,
+            indices.compact()._handle,
+            out._handle,
+            count,
+            dim,
+        )
+        return out
+
     def reduce_view_out(self, axis, keepdims=False):
         if isinstance(axis, tuple) and not axis:
             raise ValueError("Empty axis in reduce")
@@ -568,6 +584,10 @@ def dropout_apply(a, mask, keep_prob):
 
 def embedding(weight, indices):
     return weight.embedding(indices)
+
+
+def embedding_backward(out_grad, indices, weight_shape):
+    return out_grad.embedding_backward(indices, weight_shape)
 
 
 def flip(a, axes):

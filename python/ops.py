@@ -3,8 +3,6 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-import numpy as np
-
 import backend_ndarray as nd
 from tensor import Tensor, TensorOp, TensorTuple, TensorTupleOp
 
@@ -680,12 +678,12 @@ class EmbeddingLookup(TensorOp):
 
     def gradient(self, out_grad, node):
         weight, indices = node.inputs
-        vocab_size, dim = weight.shape
-        flat_indices = indices.numpy().astype("int32").reshape(-1)
-        one_hot = np.eye(vocab_size, dtype="float32")[flat_indices]
-        one_hot = Tensor(one_hot, device=out_grad.device, requires_grad=False)
-        grad = out_grad.reshape((flat_indices.size, dim))
-        return one_hot.transpose() @ grad, None
+        grad = nd.embedding_backward(
+            out_grad.realize_cached_data(),
+            indices.realize_cached_data(),
+            weight.shape,
+        )
+        return Tensor(grad), None
 
 
 def embedding(weight: Tensor, indices: Tensor):
